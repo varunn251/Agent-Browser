@@ -611,7 +611,7 @@ pub async fn click(cmd: &Value, state: &mut DaemonState) -> Result<Value, String
 }
 
 /// Decodes the click the way Chrome does, then presses the requested button the requested number
-/// of times. Modifier keys are refused: nothing here holds them yet.
+/// of times while holding any requested modifier keys.
 async fn click_with(
     cmd: &Value,
     state: &mut DaemonState,
@@ -626,16 +626,15 @@ async fn click_with(
     let ClickPlan::Pointer(spec) = plan else {
         return click_new_tab(selector, state).await;
     };
-    if spec.modifiers != Modifiers::default() {
-        return Err("--modifiers is not supported with --engine firefox".to_string());
-    }
     let target = resolve_target(state, selector).await?;
+    let keys = spec.modifiers.key_names();
     let actions = pointer_click(
         &Origin::Element(target.shared_id.clone()),
-        spec.button.name(),
+        spec.button,
         u32::from(spec.count),
     );
-    Ok(act_pointer(
+    hold_modifiers(state, &target.context, &keys, "keyDown").await?;
+    let outcome = act_pointer(
         state,
         cmd,
         &target,
@@ -644,8 +643,26 @@ async fn click_with(
         actions,
         json!({ "clicked": selector }),
     )
-    .await?
-    .value)
+    .await;
+    let released = hold_modifiers(state, &target.context, &keys, "keyUp").await;
+    let outcome = outcome?;
+    released?;
+    Ok(outcome.value)
+}
+
+/// Presses or releases the modifier keys for one gesture so they stay held across it.
+async fn hold_modifiers(
+    state: &mut DaemonState,
+    context: &str,
+    keys: &[&str],
+    event_type: &str,
+) -> Result<(), String> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let ff = state.firefox.as_ref().ok_or("Browser not launched")?;
+    perform_actions(ff, context, modifier_actions(event_type, keys)).await?;
+    Ok(())
 }
 
 /// Opens the target link in a new tab, returning Chrome's `{clicked, newTab, url}` shape.
@@ -1940,14 +1957,5 @@ mod tests {
             .expect("the prompt command is sent");
         assert_eq!(params["context"], "ctx-other");
         assert!(state.pending_dialog.is_none());
-    }
-
-    #[tokio::test]
-    async fn clicks_refuse_modifier_keys() {
-        let mut state = DaemonState::new();
-        let held = json!({"selector": "#a", "modifiers": 2});
-        let refused = "--modifiers is not supported with --engine firefox";
-        assert_eq!(click(&held, &mut state).await.unwrap_err(), refused);
-        assert_eq!(dblclick(&held, &mut state).await.unwrap_err(), refused);
     }
 }

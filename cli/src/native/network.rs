@@ -126,6 +126,17 @@ impl DomainFilter {
     }
 }
 
+/// Rejects a navigation to a URL outside the allowed domains; a missing filter allows everything.
+pub(crate) fn check_navigation_allowed(
+    filter: Option<&DomainFilter>,
+    url: &str,
+) -> Result<(), String> {
+    match filter {
+        Some(filter) => filter.check_url(url),
+        None => Ok(()),
+    }
+}
+
 fn parse_domain_list(input: &str) -> Vec<String> {
     input
         .split(',')
@@ -790,6 +801,19 @@ mod tests {
     fn test_domain_filter_empty() {
         let filter = DomainFilter::new("");
         assert!(filter.is_allowed("anything.com"));
+    }
+
+    #[test]
+    fn navigation_allows_about_blank_and_blocks_every_other_unlisted_url() {
+        let filter = DomainFilter::new("example.com");
+        assert!(filter.check_url("about:blank").is_ok());
+        assert!(filter.check_url("https://example.com/page").is_ok());
+        assert_eq!(
+            filter.check_url("https://evil.example/").unwrap_err(),
+            "Domain 'evil.example' is not in the allowed domains list"
+        );
+        assert!(filter.check_url("data:text/html,hi").is_err());
+        assert!(check_navigation_allowed(None, "https://evil.example/").is_ok());
     }
 
     #[test]

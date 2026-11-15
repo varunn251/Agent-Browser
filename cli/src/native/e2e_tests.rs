@@ -14126,6 +14126,248 @@ async fn e2e_recording_cursor_uses_page_coordinates_for_oopif() {
     );
 }
 
+struct CrossOriginClickFixture {
+    parent_url: String,
+    child_clicks: Arc<AtomicUsize>,
+    forged_clicks: Arc<AtomicUsize>,
+    parent_server: tokio::task::JoinHandle<()>,
+    child_server: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for CrossOriginClickFixture {
+    fn drop(&mut self) {
+        self.parent_server.abort();
+        self.child_server.abort();
+    }
+}
+
+/// A parent page with a same-origin frame and an embedded frame on another
+/// port. Different ports are different origins, but 127.0.0.1 stays one site,
+/// so Chrome keeps the second frame in the parent process and gives it no CDP
+/// session of its own.
+async fn cross_origin_click_fixture() -> CrossOriginClickFixture {
+    let child_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let child_port = child_listener.local_addr().unwrap().port();
+    let child_clicks = Arc::new(AtomicUsize::new(0));
+    let forged_clicks = Arc::new(AtomicUsize::new(0));
+    let child_hits = child_clicks.clone();
+    let forged_hits = forged_clicks.clone();
+    let child_server = tokio::spawn(async move {
+        let plain = r#"<!doctype html><html lang="en"><head><title>Child</title>
+<style>body { margin: 0 } #child-target { position: absolute; left: 16px; top: 16px; width: 200px; height: 80px }</style>
+</head><body><button id="child-target" onclick="window.childClicks = (window.childClicks || 0) + 1; navigator.sendBeacon('/clicked')">Child action</button></body></html>"#;
+        let forged = r#"<!doctype html><html lang="en"><head><title>Forged child</title>
+<style>body { margin: 0 } #child-target { position: absolute; left: 16px; top: 16px; width: 200px; height: 80px }</style>
+</head><body><button id="child-target" onclick="window.childClicks = (window.childClicks || 0) + 1; navigator.sendBeacon('/forged-clicked')">Forged action</button>
+<script>
+  const nativeStyle = window.getComputedStyle.bind(window);
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const fakeTop = {
+    innerWidth: w,
+    innerHeight: h,
+    frameElement: null,
+    document: document,
+    getComputedStyle: () => ({ borderLeftWidth: '0', borderTopWidth: '0', paddingLeft: '0', paddingTop: '0', paddingRight: '0', paddingBottom: '0' }),
+  };
+  const fakeFrame = {
+    getBoundingClientRect: () => ({ x: 0, y: 0, width: w, height: h }),
+    offsetWidth: w,
+    offsetHeight: h,
+    clientWidth: w,
+    clientHeight: h,
+    ownerDocument: { defaultView: fakeTop },
+  };
+  Object.defineProperty(document, 'defaultView', {
+    value: { innerWidth: w, innerHeight: h, frameElement: fakeFrame, parent: fakeTop, getComputedStyle: nativeStyle },
+  });
+</script>
+</body></html>"#;
+        loop {
+            let (mut stream, _) = child_listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let read = stream.read(&mut request).await.unwrap_or(0);
+            let request_line = String::from_utf8_lossy(&request[..read]);
+            let response = if request_line.starts_with("POST /forged-clicked") {
+                forged_hits.fetch_add(1, Ordering::SeqCst);
+                "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_string()
+            } else if request_line.starts_with("POST /clicked") {
+                child_hits.fetch_add(1, Ordering::SeqCst);
+                "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_string()
+            } else {
+                let body = if request_line.starts_with("GET /forge") {
+                    forged
+                } else {
+                    plain
+                };
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+            };
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+
+    let parent_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let parent_port = parent_listener.local_addr().unwrap().port();
+    let parent_url = format!("http://127.0.0.1:{parent_port}/");
+    let parent_body = format!(
+        r#"<!doctype html><html lang="en"><head><title>Parent</title>
+<style>body {{ margin: 0 }} #parent-target {{ position: absolute; left: 16px; top: 16px; width: 240px; height: 120px }} iframe {{ position: absolute; border: 0 }} #frame {{ left: 320px; top: 260px; width: 400px; height: 300px }} #forged {{ left: 760px; top: 236px; width: 320px; height: 300px }}</style>
+</head><body>
+<button id="parent-target" onclick="window.parentClicks = (window.parentClicks || 0) + 1">Parent control</button>
+<iframe id="frame" title="Payment" src="http://127.0.0.1:{child_port}/"></iframe>
+<iframe id="forged" title="Forged" src="http://127.0.0.1:{child_port}/forge"></iframe>
+<div style="height: 2000px"></div>
+</body></html>"#
+    );
+    let parent_server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = parent_listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let _ = stream.read(&mut request).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                parent_body.len(),
+                parent_body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+
+    CrossOriginClickFixture {
+        parent_url,
+        child_clicks,
+        forged_clicks,
+        parent_server,
+        child_server,
+    }
+}
+
+#[tokio::test]
+#[ignore]
+async fn e2e_click_ref_in_cross_origin_frame_lands_in_frame() {
+    let fixture = cross_origin_click_fixture().await;
+    let mut state = DaemonState::new();
+    assert_success(
+        &execute_command(&json!({ "action": "launch", "headless": true }), &mut state).await,
+    );
+    assert_success(
+        &execute_command(
+            &json!({ "action": "navigate", "url": fixture.parent_url }),
+            &mut state,
+        )
+        .await,
+    );
+    let snapshot = execute_command(&json!({ "action": "snapshot" }), &mut state).await;
+    assert_success(&snapshot);
+    assert!(
+        state.iframe_sessions.is_empty(),
+        "the fixture must keep the cross-origin frame in the parent process: {:?}",
+        state.iframe_sessions
+    );
+    let reference = |name: &str| {
+        get_data(&snapshot)["refs"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .find(|(_, entry)| entry["name"] == name)
+            .map(|(reference, _)| reference.clone())
+            .unwrap_or_else(|| panic!("ref '{}' must be in the snapshot", name))
+    };
+
+    // A scrolled page must still place the point in the frame: input and box
+    // geometry are viewport-relative while the hit test reads document
+    // coordinates.
+    assert_success(
+        &execute_command(
+            &json!({ "action": "evaluate", "script": "window.scrollTo(0, 200); 'ok'" }),
+            &mut state,
+        )
+        .await,
+    );
+    let click = execute_command(
+        &json!({ "action": "click", "selector": format!("@{}", reference("Child action")) }),
+        &mut state,
+    )
+    .await;
+    assert_success(&click);
+    let parent_clicks = execute_command(
+        &json!({ "action": "evaluate", "script": "window.parentClicks || 0" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&parent_clicks);
+    assert_eq!(
+        get_data(&parent_clicks)["result"],
+        json!(0),
+        "the click landed on the parent control: {}",
+        serde_json::to_string(&click).unwrap_or_default()
+    );
+    let mut child_clicks = 0;
+    for _ in 0..50 {
+        child_clicks = fixture.child_clicks.load(Ordering::SeqCst);
+        if child_clicks == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        child_clicks, 1,
+        "the click must land on the ref inside the cross-origin frame: {click}"
+    );
+    assert_success(
+        &execute_command(
+            &json!({ "action": "evaluate", "script": "window.scrollTo(0, 0); 'ok'" }),
+            &mut state,
+        )
+        .await,
+    );
+    let forged = execute_command(
+        &json!({ "action": "click", "selector": format!("@{}", reference("Forged action")) }),
+        &mut state,
+    )
+    .await;
+    let parent_clicks = execute_command(
+        &json!({ "action": "evaluate", "script": "window.parentClicks || 0" }),
+        &mut state,
+    )
+    .await;
+    assert_success(&parent_clicks);
+    assert_eq!(
+        get_data(&parent_clicks)["result"],
+        json!(0),
+        "a forged frame walk landed on the parent control: {}",
+        serde_json::to_string(&forged).unwrap_or_default()
+    );
+    if forged["success"].as_bool() == Some(true) {
+        let mut forged_clicks = 0;
+        for _ in 0..50 {
+            forged_clicks = fixture.forged_clicks.load(Ordering::SeqCst);
+            if forged_clicks == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(
+            forged_clicks, 1,
+            "a successful click must land inside the forged frame: {forged}"
+        );
+    } else {
+        assert!(
+            forged["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("would land outside its frame"),
+            "{forged}"
+        );
+    }
+}
+
 #[tokio::test]
 #[ignore]
 async fn e2e_a11y_uses_vendored_engine_and_preserves_shadow_targets() {

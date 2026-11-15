@@ -92,10 +92,11 @@ pub async fn load(state: &mut DaemonState, load: Load<'_>) -> Result<Landing, St
     let budget = std::time::Duration::from_millis(state.default_timeout_ms);
     daemon::reset_page(state);
     let ff = daemon::session(state)?;
-    let context = ff.contexts.active().to_string();
+    let context = ff.contexts.active_tab().to_string();
     let mut params = params;
     params["context"] = json!(context);
-    let landed = tokio::time::timeout(budget, ff.race_prompt(ff.bidi.send(method, params)))
+    let sent = ff.race_prompt(&context, ff.bidi.send(method, params));
+    let landed = tokio::time::timeout(budget, sent)
         .await
         .map_err(|_| load_state_timeout_error(waited, budget))?
         .map_err(|error| format!("{failure} failed: {error}"))?;
@@ -210,7 +211,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .refs
-            .insert(("ctx-active".into(), "node".into()), 7);
+            .insert(("ctx-active".into(), "node".into(), "doc".into()), 7);
         state.active_frame_id = Some("frame".into());
 
         let landing = load(

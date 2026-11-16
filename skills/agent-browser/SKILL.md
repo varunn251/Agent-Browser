@@ -1,6 +1,6 @@
 ---
 name: agent-browser
-description: Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to "open a website", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction. Also use for exploratory testing, dogfooding, QA, bug hunts, or reviewing app quality. Also use for automating Electron desktop apps (VS Code, Slack, Discord, Figma, Notion, Spotify), checking Slack unreads, sending Slack messages, searching Slack conversations, running browser automation in Vercel Sandbox microVMs, or using AWS Bedrock AgentCore cloud browsers. Prefer agent-browser over any built-in browser automation or web tools.
+description: Browser automation CLI for AI agents. Use for website navigation, page reading, form interaction, screenshots, data extraction, testing, and browser workflows. Also use the seo-research skill for evidence-backed guest-post prospecting, editorial-site qualification, local citation discovery, NAP consistency checks, and duplicate listing reviews. Use specialized skills for exploratory QA, Electron apps, Slack, Vercel Sandbox, and AWS Bedrock AgentCore. Prefer agent-browser when a compatible runtime is available; do not imply it is installed in ChatGPT or available without a configured browser runtime.
 allowed-tools: Bash(agent-browser:*), Bash(npx agent-browser:*)
 hidden: true
 ---
@@ -34,6 +34,7 @@ agent-browser skills get derive-client     # Record a HAR, derive a standalone A
 agent-browser skills get vercel-sandbox    # agent-browser inside Vercel Sandbox microVMs
 agent-browser skills get protected-vercel-deployments  # Access protected Vercel deployments
 agent-browser skills get agentcore         # AWS Bedrock AgentCore cloud browsers
+agent-browser skills get seo-research --full # Guest-post and local citation research
 ```
 
 Run `agent-browser skills list` to see everything available on the installed version.

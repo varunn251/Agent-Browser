@@ -59,7 +59,12 @@ For each prospect, return:
 - A reasoned score or qualification decision.
 - A next action that does not imply permission to submit, contact, pay, or publish.
 
-Use the CSV templates in `templates/` when the user requests an export or tracker-ready data. Never pad a requested prospect count with weak or unverified sites. Report the actual verified count and explain any shortfall.
+Use these bundled files when the user requests an export or tracker-ready data:
+- `templates/guest-post-prospects.csv`
+- `templates/local-citations.csv`
+- `templates/research-report.md`
+
+Never pad a requested prospect count with weak or unverified sites. Report the actual verified count and explain any shortfall.
 
 ## Final review
 

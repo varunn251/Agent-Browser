@@ -508,6 +508,7 @@ EOF
 - **Vercel Sandbox microVMs**: `agent-browser skills get vercel-sandbox`
 - **Vercel deployment behind Authentication, SSO, or Deployment Protection**: `agent-browser skills get protected-vercel-deployments`
 - **AWS Bedrock AgentCore cloud browser**: `agent-browser skills get agentcore`
+- **SEO prospecting and local citations**: `agent-browser skills get seo-research --full`
 
 ## Accessibility audits
 
